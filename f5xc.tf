@@ -10,9 +10,10 @@ resource "volterra_securemesh_site_v2" "this" {
   block_all_services      = false
   logs_streaming_disabled = true
 
-  labels = {
-    "ves.io/provider" = "ves-io-AZURE"
-  }
+  labels = merge(
+    { "ves.io/provider" = "ves-io-AZURE" },
+    var.enable_site_mesh_group ? { (var.site_mesh_label_key) = var.site_mesh_label_value } : {}
+  )
 
   offline_survivability_mode {
     enable_offline_survivability_mode = true
@@ -38,6 +39,12 @@ resource "volterra_securemesh_site_v2" "this" {
 
   azure {
     not_managed {}
+  }
+
+  # The CE adds hardware/OS metadata labels during registration.
+  # Ignore them so Terraform doesn't try to remove them on every apply.
+  lifecycle {
+    ignore_changes = [labels]
   }
 }
 

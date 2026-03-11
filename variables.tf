@@ -74,8 +74,8 @@ variable "inside_subnet_cidr" {
 
 variable "vhd_download_url" {
   type        = string
-  description = "F5 XC CE VHD download URL from Console (e.g. https://vesio.blob.core.windows.net/releases/rhel/9/x86_64/images/securemeshV2/azure/f5xc-ce-<version>.vhd.gz)"
-  default     = null
+  description = "F5 XC CE VHD download URL from Console"
+  default     = "https://vesio.blob.core.windows.net/releases/rhel/9/x86_64/images/securemeshV2/azure/f5xc-ce-9.2024.44-20250102054713.vhd.gz"
 }
 
 variable "vhd_storage_account_name" {
@@ -136,6 +136,29 @@ variable "ssh_public_key" {
   sensitive   = true
 }
 
+
+# -----------------------------------------------------------------------------
+# Networking
+# -----------------------------------------------------------------------------
+
+variable "enable_site_mesh_group" {
+  type        = bool
+  description = "Enable site mesh group on SLO for site-to-site connectivity"
+  default     = true
+}
+
+variable "site_mesh_label_key" {
+  type        = string
+  description = "Label key used by the core MCN virtual site selector to include this CE in a mesh group"
+  default     = "site-mesh"
+}
+
+variable "site_mesh_label_value" {
+  type        = string
+  description = "Label value for mesh group membership (must match the core MCN virtual site selector)"
+  default     = "global-network-mesh"
+}
+
 variable "enable_etcd_fix" {
   type        = bool
   description = "TEMPORARY: Enable cloud-init workaround for VPM bug that leaves ETCD_IMAGE blank in /etc/default/etcd-member. Disable once the CE image is patched."
@@ -146,16 +169,6 @@ variable "ce_etcd_image" {
   type        = string
   description = "TEMPORARY: Etcd container image for the etcd-member fix. Only used when enable_etcd_fix = true."
   default     = "200853955439.dkr.ecr.us-gov-west-1.amazonaws.com/etcd@sha256:5e084d6d22ee0a3571e3f755b8946cad297afb05e1f3772dc0fcd1a70ae6c928"
-}
-
-# -----------------------------------------------------------------------------
-# Networking
-# -----------------------------------------------------------------------------
-
-variable "enable_site_mesh_group" {
-  type        = bool
-  description = "Enable site mesh group on SLO for site-to-site connectivity"
-  default     = true
 }
 
 variable "slo_security_group_id" {
