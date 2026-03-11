@@ -48,6 +48,217 @@ resource "volterra_securemesh_site_v2" "this" {
   }
 }
 
+# -----------------------------------------------------------------------------
+# Day-2 API provisioners — set public IP and segment interface on the SMSv2
+# site object after the CE registers. Auth prefers API token; falls back to P12.
+# -----------------------------------------------------------------------------
+
+resource "terraform_data" "set_public_ip" {
+  count = var.create_public_ip ? 1 : 0
+
+  triggers_replace = [azurerm_public_ip.slo[0].ip_address]
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    environment = {
+      F5XC_API_TOKEN = var.f5xc_api_token != null ? var.f5xc_api_token : ""
+    }
+    command = <<-SCRIPT
+      set -euo pipefail
+
+      API_URL="${var.f5xc_api_url}"
+      P12_FILE="${var.f5xc_api_p12_file}"
+      SITE_NAME="${volterra_securemesh_site_v2.this.name}"
+      PUBLIC_IP="${azurerm_public_ip.slo[0].ip_address}"
+      MAX_WAIT=3600
+      POLL_INTERVAL=30
+
+      # --- Auth: prefer API token, fall back to P12 cert ---
+      if [ -n "$${F5XC_API_TOKEN:-}" ]; then
+        CURL_AUTH=(-H "Authorization: APIToken $F5XC_API_TOKEN")
+      else
+        WORK_DIR=$(mktemp -d)
+        trap 'rm -rf "$WORK_DIR"' EXIT
+        openssl pkcs12 -in "$P12_FILE" -clcerts -nokeys -out "$WORK_DIR/cert.pem" -passin "env:VES_P12_PASSWORD" 2>/dev/null
+        openssl pkcs12 -in "$P12_FILE" -nocerts -nodes -out "$WORK_DIR/key.pem" -passin "env:VES_P12_PASSWORD" 2>/dev/null
+        CURL_AUTH=(--cert "$WORK_DIR/cert.pem" --key "$WORK_DIR/key.pem")
+      fi
+
+      echo "Waiting for site $SITE_NAME to come ONLINE..."
+      elapsed=0
+      while true; do
+        STATE=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME" | \
+          python3 -c "import sys,json; print(json.load(sys.stdin).get('spec',{}).get('site_state',''))" 2>/dev/null || echo "")
+        if [ "$STATE" = "ONLINE" ]; then
+          echo "Site is ONLINE."
+          break
+        fi
+        if [ "$elapsed" -ge "$MAX_WAIT" ]; then
+          echo "WARNING: Site not ONLINE after $${MAX_WAIT}s. Skipping public IP update."
+          exit 0
+        fi
+        echo "  State: $STATE ($${elapsed}s elapsed)"
+        sleep $POLL_INTERVAL
+        elapsed=$((elapsed + POLL_INTERVAL))
+      done
+
+      # GET current config, update public_ip on the node, PUT back
+      CURRENT=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME")
+
+      UPDATED=$(echo "$CURRENT" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for cloud in ['aws','azure','kvm','vmware','baremetal']:
+    nm = d.get('spec',{}).get(cloud,{}).get('not_managed',{})
+    nodes = nm.get('node_list',[])
+    if nodes:
+        nodes[0]['public_ip'] = '$PUBLIC_IP'
+        break
+body = {
+    'metadata': {
+        'name': d['metadata']['name'],
+        'namespace': d['metadata']['namespace'],
+        'labels': d['metadata']['labels'],
+        'description': d['metadata'].get('description',''),
+        'annotations': d['metadata'].get('annotations', {}),
+        'disable': d['metadata'].get('disable', False)
+    },
+    'resource_version': d['resource_version'],
+    'spec': d['spec']
+}
+print(json.dumps(body))
+")
+
+      RESULT=$(echo "$UPDATED" | curl -s -X PUT "$${CURL_AUTH[@]}" \
+        -H "Content-Type: application/json" \
+        "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME" \
+        -d @-)
+
+      if echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if 'code' not in d else 1)" 2>/dev/null; then
+        echo "Public IP $PUBLIC_IP set on site $SITE_NAME"
+      else
+        echo "WARNING: Failed to set public IP: $(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('message','unknown'))" 2>/dev/null)"
+      fi
+    SCRIPT
+  }
+
+  depends_on = [
+    volterra_securemesh_site_v2.this,
+    azurerm_linux_virtual_machine.ce,
+  ]
+}
+
+# -----------------------------------------------------------------------------
+# Set network segment on SLI interface after site registration.
+# -----------------------------------------------------------------------------
+
+resource "terraform_data" "set_segment_interface" {
+  count = var.segment_name != null ? 1 : 0
+
+  triggers_replace = [var.segment_name]
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    environment = {
+      F5XC_API_TOKEN = var.f5xc_api_token != null ? var.f5xc_api_token : ""
+    }
+    command = <<-SCRIPT
+      set -euo pipefail
+
+      API_URL="${var.f5xc_api_url}"
+      P12_FILE="${var.f5xc_api_p12_file}"
+      SITE_NAME="${volterra_securemesh_site_v2.this.name}"
+      SEGMENT_NAME="${var.segment_name}"
+      MAX_WAIT=3600
+      POLL_INTERVAL=30
+
+      # --- Auth: prefer API token, fall back to P12 cert ---
+      if [ -n "$${F5XC_API_TOKEN:-}" ]; then
+        CURL_AUTH=(-H "Authorization: APIToken $F5XC_API_TOKEN")
+      else
+        WORK_DIR=$(mktemp -d)
+        trap 'rm -rf "$WORK_DIR"' EXIT
+        openssl pkcs12 -in "$P12_FILE" -clcerts -nokeys -out "$WORK_DIR/cert.pem" -passin "env:VES_P12_PASSWORD" 2>/dev/null
+        openssl pkcs12 -in "$P12_FILE" -nocerts -nodes -out "$WORK_DIR/key.pem" -passin "env:VES_P12_PASSWORD" 2>/dev/null
+        CURL_AUTH=(--cert "$WORK_DIR/cert.pem" --key "$WORK_DIR/key.pem")
+      fi
+
+      echo "Waiting for site $SITE_NAME to come ONLINE..."
+      elapsed=0
+      while true; do
+        STATE=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME" | \
+          python3 -c "import sys,json; print(json.load(sys.stdin).get('spec',{}).get('site_state',''))" 2>/dev/null || echo "")
+        if [ "$STATE" = "ONLINE" ]; then
+          echo "Site is ONLINE."
+          break
+        fi
+        if [ "$elapsed" -ge "$MAX_WAIT" ]; then
+          echo "WARNING: Site not ONLINE after $${MAX_WAIT}s. Skipping segment config."
+          exit 0
+        fi
+        echo "  State: $STATE ($${elapsed}s elapsed)"
+        sleep $POLL_INTERVAL
+        elapsed=$((elapsed + POLL_INTERVAL))
+      done
+
+      # GET current config, set segment_network on SLI interface, PUT back
+      CURRENT=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME")
+
+      UPDATED=$(echo "$CURRENT" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+segment_name = '$SEGMENT_NAME'
+tenant = d.get('system_metadata',{}).get('tenant', '')
+for cloud in ['aws','azure','kvm','vmware','baremetal']:
+    nm = d.get('spec',{}).get(cloud,{}).get('not_managed',{})
+    nodes = nm.get('node_list',[])
+    if nodes:
+        ifaces = nodes[0].get('interface_list',[])
+        # SLI is the second interface (index 1)
+        if len(ifaces) > 1:
+            ifaces[1]['segment_network'] = {
+                'name': segment_name,
+                'namespace': 'system',
+                'tenant': tenant
+            }
+            # Remove mutually exclusive network type
+            ifaces[1].pop('site_local_inside_network', None)
+        break
+body = {
+    'metadata': {
+        'name': d['metadata']['name'],
+        'namespace': d['metadata']['namespace'],
+        'labels': d['metadata']['labels'],
+        'description': d['metadata'].get('description',''),
+        'annotations': d['metadata'].get('annotations', {}),
+        'disable': d['metadata'].get('disable', False)
+    },
+    'resource_version': d['resource_version'],
+    'spec': d['spec']
+}
+print(json.dumps(body))
+")
+
+      RESULT=$(echo "$UPDATED" | curl -s -X PUT "$${CURL_AUTH[@]}" \
+        -H "Content-Type: application/json" \
+        "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME" \
+        -d @-)
+
+      if echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if 'code' not in d else 1)" 2>/dev/null; then
+        echo "Segment '$SEGMENT_NAME' configured on SLI interface for site $SITE_NAME"
+      else
+        echo "WARNING: Failed to set segment: $(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('message','unknown'))" 2>/dev/null)"
+      fi
+    SCRIPT
+  }
+
+  depends_on = [
+    volterra_securemesh_site_v2.this,
+    azurerm_linux_virtual_machine.ce,
+    terraform_data.set_public_ip,
+  ]
+}
+
 resource "volterra_token" "this" {
   depends_on = [volterra_securemesh_site_v2.this]
   name       = "${local.prefix}-token"

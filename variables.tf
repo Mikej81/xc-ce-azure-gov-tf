@@ -12,6 +12,23 @@ variable "f5xc_api_p12_file" {
   description = "Path to the F5 XC API credentials P12 file (password via VES_P12_PASSWORD env var)"
 }
 
+variable "f5xc_api_token" {
+  type        = string
+  description = "F5 XC API token for Day-2 provisioners (set public IP, configure segments). If provided, used instead of P12 for API calls."
+  default     = null
+  sensitive   = true
+}
+
+# -----------------------------------------------------------------------------
+# Network Segment (Day-2)
+# -----------------------------------------------------------------------------
+
+variable "segment_name" {
+  type        = string
+  description = "Network segment to assign to the SLI interface after site registration. If null, no segment is configured."
+  default     = null
+}
+
 # -----------------------------------------------------------------------------
 # Azure
 # -----------------------------------------------------------------------------

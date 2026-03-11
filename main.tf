@@ -331,7 +331,7 @@ resource "azurerm_network_interface" "test_vm" {
   name                           = "${local.prefix}-nic-testvm"
   location                       = var.location
   resource_group_name            = local.resource_group_name
-  accelerated_networking_enabled = true
+  accelerated_networking_enabled = false
 
   ip_configuration {
     name                          = "sli"
