@@ -22,7 +22,10 @@ graph TD
         end
     end
     CE -->|"IPsec / SSL"| XC["F5 XC Global Network"]
+    CE -.->|"IKE / ESP"| SMG["Site Mesh Group\n(CE-to-CE IPsec)"]:::dashed
     TestVM -.->|"via CE SLI"| CE
+
+    classDef dashed stroke-dasharray: 5 5
 ```
 
 ## Prerequisites
