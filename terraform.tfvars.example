@@ -1,0 +1,51 @@
+# =============================================================================
+# F5 XC SMSv2 CE — Azure Government
+# =============================================================================
+
+# -- F5 XC API --
+f5xc_api_url      = "https://<tenant>.console.f5xc.f5gov.io/api"
+f5xc_api_p12_file = "./creds/<tenant>.console.f5xc.f5gov.io.api-creds.p12"
+# Set P12 password: export VES_P12_PASSWORD=<password>
+
+# -- Azure Gov --
+location = "usgovvirginia"
+
+# Existing infrastructure (leave commented to create new resources automatically)
+# resource_group_name      = "my-rg"
+# vnet_name                = "my-vnet"
+# outside_subnet_name      = "slo-subnet"
+# inside_subnet_name       = "sli-subnet"
+# vhd_storage_account_name = "mystorageacct"
+
+# Custom address space (only used when creating new VNet/subnets)
+# vnet_address_space  = "10.0.0.0/16"
+# outside_subnet_cidr = "10.0.1.0/24"
+# inside_subnet_cidr  = "10.0.2.0/24"
+
+# -- CE VHD Image --
+# Get this URL from F5 XC Console: create SMSv2 site > ... > Copy Image Name
+vhd_download_url = "https://vesio.blob.core.windows.net/releases/rhel/9/x86_64/images/securemeshV2/azure/f5xc-ce-<version>.vhd.gz"
+# vhd_blob_name  = ""  # auto-derived from URL if omitted
+
+# -- Site --
+site_name = "xc-ce-azgov"
+
+# -- VM --
+instance_type   = "Standard_D8s_v4"
+os_disk_size_gb = 128
+ssh_public_key  = "ssh-rsa AAAAB3..."
+
+# -- Networking --
+create_public_ip = true
+# slo_private_ip = "10.0.1.10"
+# sli_private_ip = "10.0.2.10"
+
+# -- Test VM --
+# deploy_test_vm = true
+# test_vm_size   = "Standard_B2s"
+
+# -- Tags --
+tags = {
+  environment = "production"
+  owner       = "your-name"
+}
