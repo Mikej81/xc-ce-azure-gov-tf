@@ -72,9 +72,15 @@ variable "inside_subnet_cidr" {
 # automatically on first apply.
 # -----------------------------------------------------------------------------
 
+variable "image_id" {
+  type        = string
+  description = "Existing Azure Image ID for the CE. If provided, VHD download/upload is skipped."
+  default     = null
+}
+
 variable "vhd_download_url" {
   type        = string
-  description = "F5 XC CE VHD download URL from Console"
+  description = "F5 XC CE VHD download URL from Console. Ignored if image_id is provided."
   default     = "https://vesio.blob.core.windows.net/releases/rhel/9/x86_64/images/securemeshV2/azure/f5xc-ce-9.2024.44-20250102054713.vhd.gz"
 }
 

@@ -21,15 +21,15 @@ locals {
 }
 
 data "azurerm_storage_account" "vhd" {
-  count               = var.vhd_storage_account_name != null ? 1 : 0
+  count               = var.image_id == null && var.vhd_storage_account_name != null ? 1 : 0
   name                = var.vhd_storage_account_name
   resource_group_name = local.resource_group_name
 }
 
-# Download and upload the VHD when a download URL is provided.
+# Download and upload the VHD when a download URL is provided and no image_id is given.
 # Skips if the blob already exists in storage.
 resource "terraform_data" "vhd_upload" {
-  count = var.vhd_download_url != null ? 1 : 0
+  count = var.image_id == null && var.vhd_download_url != null ? 1 : 0
 
   triggers_replace = [var.vhd_download_url]
 
@@ -94,10 +94,28 @@ resource "terraform_data" "vhd_upload" {
 }
 
 locals {
-  storage_blob_endpoint = var.vhd_storage_account_name != null ? data.azurerm_storage_account.vhd[0].primary_blob_endpoint : azurerm_storage_account.vhd[0].primary_blob_endpoint
+  storage_blob_endpoint = (
+    var.image_id != null ? null :
+    var.vhd_storage_account_name != null ? data.azurerm_storage_account.vhd[0].primary_blob_endpoint :
+    azurerm_storage_account.vhd[0].primary_blob_endpoint
+  )
+
+  # Resolve to existing image or the one we create
+  ce_image_id = var.image_id != null ? var.image_id : azurerm_image.ce[0].id
+}
+
+resource "azurerm_storage_account" "vhd" {
+  count                    = var.image_id == null && var.vhd_storage_account_name == null ? 1 : 0
+  name                     = replace("${var.site_name}${random_id.suffix.hex}vhd", "-", "")
+  resource_group_name      = local.resource_group_name
+  location                 = var.location
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+  tags                     = local.common_tags
 }
 
 resource "azurerm_image" "ce" {
+  count               = var.image_id == null ? 1 : 0
   name                = "${var.site_name}-ce-image"
   location            = var.location
   resource_group_name = local.resource_group_name

@@ -31,7 +31,8 @@ output "slo_public_ip" {
 }
 
 output "image_id" {
-  value = azurerm_image.ce.id
+  description = "Azure Image ID (created or provided)"
+  value       = local.ce_image_id
 }
 
 output "test_vm_private_ip" {

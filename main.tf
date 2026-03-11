@@ -20,7 +20,11 @@ locals {
   outside_subnet_id   = var.outside_subnet_name != null ? data.azurerm_subnet.outside[0].id : azurerm_subnet.outside[0].id
   inside_subnet_id    = var.inside_subnet_name != null ? data.azurerm_subnet.inside[0].id : azurerm_subnet.inside[0].id
   inside_subnet_cidr  = var.inside_subnet_name != null ? data.azurerm_subnet.inside[0].address_prefixes[0] : var.inside_subnet_cidr
-  storage_account_name = var.vhd_storage_account_name != null ? var.vhd_storage_account_name : azurerm_storage_account.vhd[0].name
+  storage_account_name = (
+    var.image_id != null ? null :
+    var.vhd_storage_account_name != null ? var.vhd_storage_account_name :
+    azurerm_storage_account.vhd[0].name
+  )
 
   # Use existing NSGs if provided, otherwise use the ones we create
   slo_nsg_id = var.slo_security_group_id != null ? var.slo_security_group_id : azurerm_network_security_group.slo[0].id
@@ -46,6 +50,12 @@ resource "azurerm_resource_group" "this" {
 # -----------------------------------------------------------------------------
 # Virtual Network — use existing or create new
 # -----------------------------------------------------------------------------
+
+data "azurerm_virtual_network" "this" {
+  count               = var.vnet_name != null ? 1 : 0
+  name                = var.vnet_name
+  resource_group_name = local.resource_group_name
+}
 
 resource "azurerm_virtual_network" "this" {
   count               = var.vnet_name == null ? 1 : 0
@@ -88,20 +98,6 @@ resource "azurerm_subnet" "inside" {
   resource_group_name  = local.resource_group_name
   virtual_network_name = local.vnet_name
   address_prefixes     = [var.inside_subnet_cidr]
-}
-
-# -----------------------------------------------------------------------------
-# Storage Account — use existing or create new (for VHD image)
-# -----------------------------------------------------------------------------
-
-resource "azurerm_storage_account" "vhd" {
-  count                    = var.vhd_storage_account_name == null ? 1 : 0
-  name                     = replace("${var.site_name}${random_id.suffix.hex}vhd", "-", "")
-  resource_group_name      = local.resource_group_name
-  location                 = var.location
-  account_tier             = "Standard"
-  account_replication_type = "LRS"
-  tags                     = local.common_tags
 }
 
 # -----------------------------------------------------------------------------
@@ -313,7 +309,7 @@ resource "azurerm_linux_virtual_machine" "ce" {
     disk_size_gb         = var.os_disk_size_gb
   }
 
-  source_image_id = azurerm_image.ce.id
+  source_image_id = local.ce_image_id
   custom_data     = base64encode(local.ce_user_data)
 
   boot_diagnostics {}
