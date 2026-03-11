@@ -60,6 +60,8 @@ graph TD
 
 ### 1. Azure Gov Login + Service Principal
 
+**Option A: Create a new Service Principal**
+
 ```bash
 source ./scripts/setup-azure-gov.sh
 ```
@@ -69,6 +71,29 @@ This will:
 - Log in interactively and confirm the subscription
 - Create a Service Principal with **Contributor** role
 - Export `ARM_*` environment variables for Terraform
+
+**Option B: Use an existing Service Principal**
+
+If you already have a Service Principal, export the following environment variables used by the [AzureRM Terraform provider](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/guides/service_principal_client_secret):
+
+```bash
+az cloud set --name AzureUSGovernment
+az login
+
+export ARM_CLIENT_ID="<service-principal-app-id>"
+export ARM_CLIENT_SECRET="<service-principal-password>"
+export ARM_TENANT_ID="<azure-ad-tenant-id>"
+export ARM_SUBSCRIPTION_ID="<subscription-id>"
+export ARM_ENVIRONMENT="usgovernment"
+```
+
+**Required RBAC roles:**
+
+| Role | Scope | Purpose |
+|---|---|---|
+| **Contributor** | Subscription or Resource Group | Create/manage all Azure resources (VMs, NICs, NSGs, storage accounts, images) and list storage account keys for VHD upload |
+
+> **Note:** If deploying into an existing resource group, the Contributor role can be scoped to that resource group instead of the full subscription. No additional data-plane roles (e.g., Storage Blob Data Contributor) are required — the VHD upload uses storage account key auth.
 
 ### 2. Set the F5 XC P12 Password
 
