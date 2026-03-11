@@ -8,24 +8,27 @@ The F5 XC CE marketplace image is not available in Azure Gov, so this project au
 
 ```mermaid
 graph TD
-    subgraph AzureGov["Azure Government"]
-        subgraph VNet["VNet"]
-            subgraph SLO["SLO Subnet (Outside)"]
-                ETH0["eth0 + PIP"]
-            end
-            subgraph SLI["SLI Subnet (Inside)"]
+    subgraph Azure["Azure Government"]
+        subgraph VNet[" "]
+            direction LR
+            subgraph SLI["SLI Subnet — Inside"]
+                VM["Test VM<br/>(optional)"]
                 ETH1["eth1"]
-                TestVM["Test VM (optional)"]
             end
-            ETH0 --- CE["CE VM"]
-            CE --- ETH1
+            CE["CE<br/>(VM)"]
+            subgraph SLO["SLO Subnet — Outside"]
+                ETH0["eth0 + Public IP"]
+            end
         end
     end
-    CE -->|"IPsec / SSL"| XC["F5 XC Global Network"]
-    CE -.->|"IKE / ESP"| SMG["Site Mesh Group\n(CE-to-CE IPsec)"]:::dashed
-    TestVM -.->|"via CE SLI"| CE
 
-    classDef dashed stroke-dasharray: 5 5
+    VM -. "routes via CE SLI" .-> ETH1
+    ETH1 --- CE
+    CE --- ETH0
+
+    ETH0 -- "IPsec Tunnel" --> XC["F5 XC Global Network"]
+    ETH0 -- "SSL Tunnel" --> XC
+    ETH0 -. "CE-to-CE IPsec" .-> SMG["Site Mesh Group<br/>(other CEs)"]
 ```
 
 ## Prerequisites
@@ -213,6 +216,16 @@ From SiteCLI, you can run host commands via `execcli`:
 ```
 
 ## How It Works
+
+```mermaid
+graph LR
+    A["Download<br/>VHD.gz"] --> B["Decompress<br/>& Upload"]
+    B --> C["Create<br/>Azure Image"]
+    C --> D["Create SMSv2<br/>Site + Token"]
+    D --> E["Deploy CE VM<br/>(cloud-init)"]
+    E --> F["CE Registers<br/>with F5 XC"]
+    F --> G["Site Online"]
+```
 
 1. **`terraform_data.vhd_upload`** — Downloads the VHD.gz from the F5 XC image repo, decompresses it, and uploads to Azure Gov Storage as a Page Blob using storage account key auth. Skips entirely if the blob already exists.
 2. **`azurerm_image.ce`** — Creates an Azure Image from the uploaded Page Blob VHD.
