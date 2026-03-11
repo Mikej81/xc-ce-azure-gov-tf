@@ -102,10 +102,13 @@ resource "terraform_data" "set_public_ip" {
         elapsed=$((elapsed + POLL_INTERVAL))
       done
 
-      # GET current config, update public_ip on the node, PUT back
-      CURRENT=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME")
+      # GET current config, update public_ip on the node, PUT back.
+      # Retry on RESOURCE_VERSION_MISMATCH — the CE updates the object frequently.
+      MAX_RETRIES=10
+      for attempt in $(seq 1 $MAX_RETRIES); do
+        CURRENT=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME")
 
-      UPDATED=$(echo "$CURRENT" | python3 -c "
+        UPDATED=$(echo "$CURRENT" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 for cloud in ['aws','azure','kvm','vmware','baremetal']:
@@ -129,16 +132,24 @@ body = {
 print(json.dumps(body))
 ")
 
-      RESULT=$(echo "$UPDATED" | curl -s -X PUT "$${CURL_AUTH[@]}" \
-        -H "Content-Type: application/json" \
-        "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME" \
-        -d @-)
+        RESULT=$(echo "$UPDATED" | curl -s -X PUT "$${CURL_AUTH[@]}" \
+          -H "Content-Type: application/json" \
+          "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME" \
+          -d @-)
 
-      if echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if 'code' not in d else 1)" 2>/dev/null; then
-        echo "Public IP $PUBLIC_IP set on site $SITE_NAME"
-      else
-        echo "WARNING: Failed to set public IP: $(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('message','unknown'))" 2>/dev/null)"
-      fi
+        if echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('code') == 10 else 1)" 2>/dev/null; then
+          echo "  Resource version conflict, retrying ($attempt/$MAX_RETRIES)..."
+          sleep 2
+          continue
+        fi
+
+        if echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if 'code' not in d else 1)" 2>/dev/null; then
+          echo "Public IP $PUBLIC_IP set on site $SITE_NAME"
+        else
+          echo "WARNING: Failed to set public IP: $(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('message','unknown'))" 2>/dev/null)"
+        fi
+        break
+      done
     SCRIPT
   }
 
@@ -201,10 +212,13 @@ resource "terraform_data" "set_segment_interface" {
         elapsed=$((elapsed + POLL_INTERVAL))
       done
 
-      # GET current config, set segment_network on SLI interface, PUT back
-      CURRENT=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME")
+      # GET current config, set segment on SLI interface, PUT back.
+      # Retry on RESOURCE_VERSION_MISMATCH — the CE updates the object frequently.
+      MAX_RETRIES=10
+      for attempt in $(seq 1 $MAX_RETRIES); do
+        CURRENT=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME")
 
-      UPDATED=$(echo "$CURRENT" | python3 -c "
+        UPDATED=$(echo "$CURRENT" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 segment_name = '$SEGMENT_NAME'
@@ -216,13 +230,13 @@ for cloud in ['aws','azure','kvm','vmware','baremetal']:
         ifaces = nodes[0].get('interface_list',[])
         # SLI is the second interface (index 1)
         if len(ifaces) > 1:
-            ifaces[1]['segment_network'] = {
-                'name': segment_name,
-                'namespace': 'system',
-                'tenant': tenant
+            ifaces[1]['network_option'] = {
+                'segment_network': {
+                    'name': segment_name,
+                    'namespace': 'system',
+                    'tenant': tenant
+                }
             }
-            # Remove mutually exclusive network type
-            ifaces[1].pop('site_local_inside_network', None)
         break
 body = {
     'metadata': {
@@ -239,16 +253,24 @@ body = {
 print(json.dumps(body))
 ")
 
-      RESULT=$(echo "$UPDATED" | curl -s -X PUT "$${CURL_AUTH[@]}" \
-        -H "Content-Type: application/json" \
-        "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME" \
-        -d @-)
+        RESULT=$(echo "$UPDATED" | curl -s -X PUT "$${CURL_AUTH[@]}" \
+          -H "Content-Type: application/json" \
+          "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME" \
+          -d @-)
 
-      if echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if 'code' not in d else 1)" 2>/dev/null; then
-        echo "Segment '$SEGMENT_NAME' configured on SLI interface for site $SITE_NAME"
-      else
-        echo "WARNING: Failed to set segment: $(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('message','unknown'))" 2>/dev/null)"
-      fi
+        if echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('code') == 10 else 1)" 2>/dev/null; then
+          echo "  Resource version conflict, retrying ($attempt/$MAX_RETRIES)..."
+          sleep 2
+          continue
+        fi
+
+        if echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if 'code' not in d else 1)" 2>/dev/null; then
+          echo "Segment '$SEGMENT_NAME' configured on SLI interface for site $SITE_NAME"
+        else
+          echo "WARNING: Failed to set segment: $(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('message','unknown'))" 2>/dev/null)"
+        fi
+        break
+      done
     SCRIPT
   }
 
