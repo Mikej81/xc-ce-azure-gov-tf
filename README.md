@@ -6,25 +6,23 @@ The F5 XC CE marketplace image is not available in Azure Gov, so this project au
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  Azure Government (usgovvirginia)                        │
-│                                                          │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │  VNet                                              │  │
-│  │                                                    │  │
-│  │  ┌──────────────┐        ┌──────────────┐         │  │
-│  │  │  SLO Subnet  │        │  SLI Subnet  │         │  │
-│  │  │  (Outside)   │        │  (Inside)    │         │  │
-│  │  │   eth0  ─────┼────────┼──── eth1     │         │  │
-│  │  │   + PIP      │   CE   │              │         │  │
-│  │  └──────────────┘  VM    └──────────────┘         │  │
-│  └────────────────────┼───────────────────────────────┘  │
-│                       │                                  │
-└───────────────────────┼──────────────────────────────────┘
-                        │ IPsec / SSL
-                        ▼
-              F5 XC Global Network
+```mermaid
+graph TD
+    subgraph AzureGov["Azure Government"]
+        subgraph VNet["VNet"]
+            subgraph SLO["SLO Subnet (Outside)"]
+                ETH0["eth0 + PIP"]
+            end
+            subgraph SLI["SLI Subnet (Inside)"]
+                ETH1["eth1"]
+                TestVM["Test VM (optional)"]
+            end
+            ETH0 --- CE["CE VM"]
+            CE --- ETH1
+        end
+    end
+    CE -->|"IPsec / SSL"| XC["F5 XC Global Network"]
+    TestVM -.->|"via CE SLI"| CE
 ```
 
 ## Prerequisites
@@ -233,8 +231,6 @@ By default, the template creates **all** Azure infrastructure (resource group, V
 **Route Tables** — Not managed by this template. Configure UDRs on the SLI subnet externally if you need to route workload traffic through the CE.
 
 **NSGs** — By default, the template creates lightweight NSGs for the SLO and SLI NICs. In enterprise environments with centrally managed NSGs, pass existing NSG IDs via `slo_security_group_id` and `sli_security_group_id` to skip NSG creation entirely.
-
-**Route Tables** — Not managed by this template. Configure UDRs on the SLI subnet externally if you need to route workload traffic through the CE.
 
 ### Networking Details
 
