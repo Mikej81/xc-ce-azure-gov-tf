@@ -278,6 +278,97 @@ print(json.dumps(body))
   depends_on = [
     volterra_securemesh_site_v2.this,
     azurerm_linux_virtual_machine.ce,
+    terraform_data.push_upgrades,
+  ]
+}
+
+# -----------------------------------------------------------------------------
+# Push available OS and SW updates after site is configured.
+# Uses the /sites/ (not /securemesh_site_v2s/) endpoint for upgrade operations.
+# -----------------------------------------------------------------------------
+
+resource "terraform_data" "push_upgrades" {
+  triggers_replace = [volterra_securemesh_site_v2.this.name]
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    environment = {
+      F5XC_API_TOKEN = var.f5xc_api_token != null ? var.f5xc_api_token : ""
+    }
+    command = <<-SCRIPT
+      set -euo pipefail
+
+      API_URL="${var.f5xc_api_url}"
+      P12_FILE="${var.f5xc_api_p12_file}"
+      SITE_NAME="${volterra_securemesh_site_v2.this.name}"
+
+      # --- Auth: prefer API token, fall back to P12 cert ---
+      if [ -n "$${F5XC_API_TOKEN:-}" ]; then
+        CURL_AUTH=(-H "Authorization: APIToken $F5XC_API_TOKEN")
+      else
+        CERT_FILE=$(mktemp) KEY_FILE=$(mktemp)
+        trap "rm -f $CERT_FILE $KEY_FILE" EXIT
+        openssl pkcs12 -in "$P12_FILE" -passin "pass:$${VES_P12_PASSWORD}" -clcerts -nokeys -legacy > "$CERT_FILE" 2>/dev/null
+        openssl pkcs12 -in "$P12_FILE" -passin "pass:$${VES_P12_PASSWORD}" -nocerts -nodes -legacy > "$KEY_FILE" 2>/dev/null
+        CURL_AUTH=(--cert "$CERT_FILE" --key "$KEY_FILE")
+      fi
+
+      # Fetch site status (uses /sites/, not /securemesh_site_v2s/)
+      SITE_DATA=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/sites/$SITE_NAME")
+
+      # Check for OS update
+      OS_VERSION=$(echo "$SITE_DATA" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for s in d.get('status', []):
+    os_st = s.get('operating_system_status', {})
+    avail = os_st.get('available_version', '')
+    current = os_st.get('deployment_state', {}).get('version', '')
+    if avail and avail != current:
+        print(avail)
+        break
+" 2>/dev/null || echo "")
+
+      if [ -n "$OS_VERSION" ]; then
+        echo "OS update available: $OS_VERSION — pushing upgrade..."
+        RESULT=$(curl -s -X POST "$${CURL_AUTH[@]}" \
+          -H "Content-Type: application/json" \
+          "$API_URL/config/namespaces/system/sites/$SITE_NAME/upgrade_os" \
+          -d "{\"version\":\"$OS_VERSION\"}")
+        echo "OS upgrade response: $RESULT"
+      else
+        echo "No OS update available for $SITE_NAME"
+      fi
+
+      # Check for SW update
+      SW_VERSION=$(echo "$SITE_DATA" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for s in d.get('status', []):
+    sw_st = s.get('volterra_software_status', {})
+    avail = sw_st.get('available_version', '')
+    current = sw_st.get('deployment_state', {}).get('version', '')
+    if avail and avail != current:
+        print(avail)
+        break
+" 2>/dev/null || echo "")
+
+      if [ -n "$SW_VERSION" ]; then
+        echo "SW update available: $SW_VERSION — pushing upgrade..."
+        RESULT=$(curl -s -X POST "$${CURL_AUTH[@]}" \
+          -H "Content-Type: application/json" \
+          "$API_URL/config/namespaces/system/sites/$SITE_NAME/upgrade_sw" \
+          -d "{\"version\":\"$SW_VERSION\"}")
+        echo "SW upgrade response: $RESULT"
+      else
+        echo "No SW update available for $SITE_NAME"
+      fi
+    SCRIPT
+  }
+
+  depends_on = [
+    volterra_securemesh_site_v2.this,
+    azurerm_linux_virtual_machine.ce,
     terraform_data.set_public_ip,
   ]
 }

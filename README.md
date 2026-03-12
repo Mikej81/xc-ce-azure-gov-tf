@@ -273,7 +273,7 @@ By default, the template creates **all** Azure infrastructure (resource group, V
 - `vhd_storage_account_name` — existing storage account (otherwise creates a new one)
 - `slo_security_group_id` / `sli_security_group_id` — existing NSG IDs (otherwise creates new NSGs)
 
-**Route Tables** — The template creates a route table on the SLI subnet with a VNet-local route. Remote CIDR routes to workloads behind other CEs are configured via cloud-init on the test VM using `test_vm_remote_cidrs`.
+**Route Tables** — The template creates a route table on the SLI subnet with a VNet-local route and a default route (`0.0.0.0/0`) pointing to the CE SLI NIC as a Virtual Appliance next hop. This is required for segment traffic — Azure's SDN needs the UDR to forward cross-site and on-prem traffic through the CE. Remote CIDR routes on the test VM are configured via cloud-init using `test_vm_remote_cidrs`.
 
 **NSGs** — By default, the template creates lightweight NSGs for the SLO and SLI NICs. In enterprise environments with centrally managed NSGs, pass existing NSG IDs via `slo_security_group_id` and `sli_security_group_id` to skip NSG creation entirely.
 

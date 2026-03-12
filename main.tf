@@ -119,6 +119,15 @@ resource "azurerm_route" "sli_vnet" {
   next_hop_type       = "VnetLocal"
 }
 
+resource "azurerm_route" "sli_default_via_ce" {
+  name                   = "default-via-ce"
+  resource_group_name    = local.resource_group_name
+  route_table_name       = azurerm_route_table.sli.name
+  address_prefix         = "0.0.0.0/0"
+  next_hop_type          = "VirtualAppliance"
+  next_hop_in_ip_address = azurerm_network_interface.sli.private_ip_address
+}
+
 resource "azurerm_subnet_route_table_association" "sli" {
   subnet_id      = local.inside_subnet_id
   route_table_id = azurerm_route_table.sli.id
