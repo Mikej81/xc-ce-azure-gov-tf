@@ -239,6 +239,12 @@ variable "test_vm_size" {
   default     = "Standard_B2s"
 }
 
+variable "test_vm_remote_cidrs" {
+  type        = list(string)
+  description = "Remote inside CIDRs to route via the CE SLI interface (e.g. on-prem, AWS)"
+  default     = []
+}
+
 # -----------------------------------------------------------------------------
 # Tags
 # -----------------------------------------------------------------------------

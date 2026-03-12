@@ -237,6 +237,7 @@ for cloud in ['aws','azure','kvm','vmware','baremetal']:
                     'tenant': tenant
                 }
             }
+            ifaces[1]['site_to_site_connectivity_interface_enabled'] = {}
         break
 body = {
     'metadata': {

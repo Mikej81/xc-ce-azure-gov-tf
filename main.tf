@@ -101,6 +101,30 @@ resource "azurerm_subnet" "inside" {
 }
 
 # -----------------------------------------------------------------------------
+# Route Table — inside subnet (default VNet route)
+# -----------------------------------------------------------------------------
+
+resource "azurerm_route_table" "sli" {
+  name                = "${local.prefix}-rt-sli"
+  location            = var.location
+  resource_group_name = local.resource_group_name
+  tags                = local.common_tags
+}
+
+resource "azurerm_route" "sli_vnet" {
+  name                = "vnet-local"
+  resource_group_name = local.resource_group_name
+  route_table_name    = azurerm_route_table.sli.name
+  address_prefix      = var.vnet_address_space
+  next_hop_type       = "VnetLocal"
+}
+
+resource "azurerm_subnet_route_table_association" "sli" {
+  subnet_id      = local.inside_subnet_id
+  route_table_id = azurerm_route_table.sli.id
+}
+
+# -----------------------------------------------------------------------------
 # Network Security Groups
 # -----------------------------------------------------------------------------
 
@@ -202,16 +226,16 @@ resource "azurerm_network_security_rule" "sli_allow_all" {
   network_security_group_name = azurerm_network_security_group.sli[0].name
 }
 
-resource "azurerm_network_security_rule" "sli_allow_icmp_outbound" {
+resource "azurerm_network_security_rule" "sli_allow_all_outbound" {
   count                       = var.sli_security_group_id == null ? 1 : 0
-  name                        = "AllowICMPOutbound"
+  name                        = "AllowAllOutbound"
   priority                    = 110
   direction                   = "Outbound"
   access                      = "Allow"
-  protocol                    = "Icmp"
+  protocol                    = "*"
   source_port_range           = "*"
   destination_port_range      = "*"
-  source_address_prefix       = local.inside_subnet_cidr
+  source_address_prefix       = "*"
   destination_address_prefix  = "*"
   resource_group_name         = local.resource_group_name
   network_security_group_name = azurerm_network_security_group.sli[0].name
@@ -351,18 +375,10 @@ resource "azurerm_network_interface_security_group_association" "test_vm" {
 locals {
   test_vm_custom_data = <<-CLOUDINIT
     #cloud-config
-    write_files:
-      - path: /etc/netplan/99-sli-routes.yaml
-        content: |
-          network:
-            version: 2
-            ethernets:
-              eth0:
-                routes:
-                  - to: 0.0.0.0/0
-                    via: ${azurerm_network_interface.sli.private_ip_address}
     runcmd:
-      - netplan apply
+    %{for cidr in var.test_vm_remote_cidrs~}
+      - ip route add ${cidr} via ${azurerm_network_interface.sli.private_ip_address}
+    %{endfor~}
   CLOUDINIT
 }
 
@@ -398,7 +414,7 @@ resource "azurerm_linux_virtual_machine" "test_vm" {
     version   = "latest"
   }
 
-  custom_data = base64encode(local.test_vm_custom_data)
+  custom_data = length(var.test_vm_remote_cidrs) > 0 ? base64encode(local.test_vm_custom_data) : null
 
   boot_diagnostics {}
 
