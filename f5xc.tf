@@ -313,22 +313,76 @@ resource "terraform_data" "push_upgrades" {
         CURL_AUTH=(--cert "$CERT_FILE" --key "$KEY_FILE")
       fi
 
-      # Fetch site status (uses /sites/, not /securemesh_site_v2s/)
-      SITE_DATA=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/sites/$SITE_NAME")
+      # Wait for available_version to be populated (node must finish registering)
+      echo "Waiting for upgrade info to appear for $SITE_NAME (up to 10 min)..."
+      MAX_WAIT=600
+      ELAPSED=0
+      OS_VERSION=""
+      SW_VERSION=""
 
-      # Check for OS update
-      OS_VERSION=$(echo "$SITE_DATA" | python3 -c "
+      while [ $ELAPSED -lt $MAX_WAIT ]; do
+        SITE_DATA=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/sites/$SITE_NAME")
+
+        OS_VERSION=$(echo "$SITE_DATA" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 for s in d.get('status', []):
-    os_st = s.get('operating_system_status', {})
+    os_st = s.get('operating_system_status') or {}
     avail = os_st.get('available_version', '')
-    current = os_st.get('deployment_state', {}).get('version', '')
-    if avail and avail != current:
-        print(avail)
+    if avail:
+        current = ((os_st.get('deployment_state') or {}).get('version', ''))
+        if avail != current:
+            print(avail)
+            break
+" 2>/dev/null || echo "")
+
+        SW_VERSION=$(echo "$SITE_DATA" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for s in d.get('status', []):
+    sw_st = s.get('volterra_software_status') or {}
+    avail = sw_st.get('available_version', '')
+    if avail:
+        current = ((sw_st.get('deployment_state') or {}).get('version', ''))
+        if avail != current:
+            print(avail)
+            break
+" 2>/dev/null || echo "")
+
+        if [ -n "$OS_VERSION" ] || [ -n "$SW_VERSION" ]; then
+          echo "Upgrade info available after $${ELAPSED}s"
+          break
+        fi
+
+        # Also check if versions are current (no upgrade needed)
+        HAS_STATUS=$(echo "$SITE_DATA" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for s in d.get('status', []):
+    os_st = s.get('operating_system_status') or {}
+    sw_st = s.get('volterra_software_status') or {}
+    os_dep = (os_st.get('deployment_state') or {}).get('version', '')
+    sw_dep = (sw_st.get('deployment_state') or {}).get('version', '')
+    if os_dep or sw_dep:
+        print('yes')
         break
 " 2>/dev/null || echo "")
 
+        if [ "$HAS_STATUS" = "yes" ] && [ -z "$OS_VERSION" ] && [ -z "$SW_VERSION" ]; then
+          echo "Site already on latest versions after $${ELAPSED}s"
+          break
+        fi
+
+        sleep 30
+        ELAPSED=$((ELAPSED + 30))
+        echo "  Still waiting... ($${ELAPSED}s)"
+      done
+
+      if [ $ELAPSED -ge $MAX_WAIT ] && [ -z "$OS_VERSION" ] && [ -z "$SW_VERSION" ]; then
+        echo "WARNING: Timed out waiting for upgrade info. Site may still be bootstrapping."
+      fi
+
+      # Push OS upgrade if available
       if [ -n "$OS_VERSION" ]; then
         echo "OS update available: $OS_VERSION — pushing upgrade..."
         RESULT=$(curl -s -X POST "$${CURL_AUTH[@]}" \
@@ -340,19 +394,7 @@ for s in d.get('status', []):
         echo "No OS update available for $SITE_NAME"
       fi
 
-      # Check for SW update
-      SW_VERSION=$(echo "$SITE_DATA" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-for s in d.get('status', []):
-    sw_st = s.get('volterra_software_status', {})
-    avail = sw_st.get('available_version', '')
-    current = sw_st.get('deployment_state', {}).get('version', '')
-    if avail and avail != current:
-        print(avail)
-        break
-" 2>/dev/null || echo "")
-
+      # Push SW upgrade if available
       if [ -n "$SW_VERSION" ]; then
         echo "SW update available: $SW_VERSION — pushing upgrade..."
         RESULT=$(curl -s -X POST "$${CURL_AUTH[@]}" \
