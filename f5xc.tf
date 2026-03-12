@@ -77,11 +77,11 @@ resource "terraform_data" "set_public_ip" {
       if [ -n "$${F5XC_API_TOKEN:-}" ]; then
         CURL_AUTH=(-H "Authorization: APIToken $F5XC_API_TOKEN")
       else
-        WORK_DIR=$(mktemp -d)
-        trap 'rm -rf "$WORK_DIR"' EXIT
-        openssl pkcs12 -in "$P12_FILE" -clcerts -nokeys -out "$WORK_DIR/cert.pem" -passin "env:VES_P12_PASSWORD" 2>/dev/null
-        openssl pkcs12 -in "$P12_FILE" -nocerts -nodes -out "$WORK_DIR/key.pem" -passin "env:VES_P12_PASSWORD" 2>/dev/null
-        CURL_AUTH=(--cert "$WORK_DIR/cert.pem" --key "$WORK_DIR/key.pem")
+        CERT_FILE=$(mktemp) KEY_FILE=$(mktemp)
+        trap "rm -f $CERT_FILE $KEY_FILE" EXIT
+        openssl pkcs12 -in "$P12_FILE" -passin "pass:$${VES_P12_PASSWORD}" -clcerts -nokeys -legacy > "$CERT_FILE" 2>/dev/null
+        openssl pkcs12 -in "$P12_FILE" -passin "pass:$${VES_P12_PASSWORD}" -nocerts -nodes -legacy > "$KEY_FILE" 2>/dev/null
+        CURL_AUTH=(--cert "$CERT_FILE" --key "$KEY_FILE")
       fi
 
       echo "Waiting for site $SITE_NAME to come ONLINE..."
@@ -187,11 +187,11 @@ resource "terraform_data" "set_segment_interface" {
       if [ -n "$${F5XC_API_TOKEN:-}" ]; then
         CURL_AUTH=(-H "Authorization: APIToken $F5XC_API_TOKEN")
       else
-        WORK_DIR=$(mktemp -d)
-        trap 'rm -rf "$WORK_DIR"' EXIT
-        openssl pkcs12 -in "$P12_FILE" -clcerts -nokeys -out "$WORK_DIR/cert.pem" -passin "env:VES_P12_PASSWORD" 2>/dev/null
-        openssl pkcs12 -in "$P12_FILE" -nocerts -nodes -out "$WORK_DIR/key.pem" -passin "env:VES_P12_PASSWORD" 2>/dev/null
-        CURL_AUTH=(--cert "$WORK_DIR/cert.pem" --key "$WORK_DIR/key.pem")
+        CERT_FILE=$(mktemp) KEY_FILE=$(mktemp)
+        trap "rm -f $CERT_FILE $KEY_FILE" EXIT
+        openssl pkcs12 -in "$P12_FILE" -passin "pass:$${VES_P12_PASSWORD}" -clcerts -nokeys -legacy > "$CERT_FILE" 2>/dev/null
+        openssl pkcs12 -in "$P12_FILE" -passin "pass:$${VES_P12_PASSWORD}" -nocerts -nodes -legacy > "$KEY_FILE" 2>/dev/null
+        CURL_AUTH=(--cert "$CERT_FILE" --key "$KEY_FILE")
       fi
 
       echo "Waiting for site $SITE_NAME to come ONLINE..."
