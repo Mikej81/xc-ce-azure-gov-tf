@@ -37,6 +37,7 @@ graph TD
 - **Azure CLI** logged in to Azure Government (`az cloud set --name AzureUSGovernment`)
 - **Azure Service Principal** with **Contributor** role on the target subscription (needed for resource management and storage account key access)
 - **F5 XC tenant** with API credentials (.p12 file) — password provided via `VES_P12_PASSWORD` env var
+- **F5 XC API token** (`f5xc_api_token`) — optional but preferred for Day-2 API calls (public IP, segment, site-to-site). Falls back to P12 if not provided. The Volterra Terraform provider still requires the P12 file.
 - **CE image URL** from F5 XC Console (see step 3 below)
 - **Local tools**: `curl`, `gunzip`, `jq` (used by provisioner and helper scripts)
 
@@ -147,17 +148,11 @@ After boot, the CE will automatically register with the F5 XC control plane. Thi
 
 > The registration token is valid for **24 hours**. If it expires, re-run `terraform apply` to generate a new one.
 
-### 6. Post-Registration: Site Mesh Group Setup
+### 6. Post-Registration: Automated Day-2 Configuration
 
-When `enable_site_mesh_group = true` (the default), the site is configured for site-to-site connectivity over the SLO public IP. After the CE registers, complete these manual steps in the F5 XC Console:
+Public IP assignment, segment interface configuration, and site-to-site connectivity are now handled **automatically** by Day-2 provisioners that run during `terraform apply`. No manual Console steps are required.
 
-1. Navigate to **Multi-Cloud Network Connect > Manage > Site Management > Secure Mesh Sites v2**
-2. Select the site > **Edit** > **Node Information**
-3. Set the **Public IP** field to the SLO public IP address (`terraform output slo_public_ip`)
-4. On the SLO interface (eth0), enable **Use for Site to Site Connectivity**
-5. Save changes
-
-These node-level properties are populated by the CE during registration and cannot be managed declaratively via Terraform.
+The provisioners wait for the site to come **ONLINE**, then use the F5 XC API to update the site object (set public IP on the node, assign the segment to the SLI interface, and enable site-to-site connectivity on SLO). Authentication prefers an API token (`f5xc_api_token`); if not provided, it falls back to extracting credentials from the P12 file via `openssl pkcs12 -legacy`.
 
 ### 7. SSH Access
 
@@ -181,6 +176,7 @@ From SiteCLI, you can run host commands via `execcli`:
 |---|---|---|---|
 | `f5xc_api_url` | F5 XC tenant API URL | — | **yes** |
 | `f5xc_api_p12_file` | Path to API .p12 credential file | — | **yes** |
+| `f5xc_api_token` | F5 XC API token for Day-2 provisioners (preferred over P12) | `null` | no |
 | `location` | Azure Gov region | `usgovvirginia` | no |
 | `resource_group_name` | Existing resource group (null = create new) | `null` | no |
 | `vnet_name` | Existing VNet (null = create new) | `null` | no |
@@ -198,7 +194,10 @@ From SiteCLI, you can run host commands via `execcli`:
 | `instance_type` | Azure VM size (min 8 vCPU / 32 GB RAM) | `Standard_D8s_v4` | no |
 | `os_disk_size_gb` | OS disk size in GB | `128` | no |
 | `ssh_public_key` | SSH public key for `cloud-user` access | — | **yes** |
+| `segment_name` | Network segment to assign to SLI interface after registration | `null` | no |
 | `enable_site_mesh_group` | Enable site mesh group on SLO for site-to-site connectivity | `true` | no |
+| `site_mesh_label_key` | Label key for mesh group membership | `site-mesh` | no |
+| `site_mesh_label_value` | Label value for mesh group membership | `global-network-mesh` | no |
 | `slo_security_group_id` | Existing NSG ID for SLO NIC (null = create new) | `null` | no |
 | `sli_security_group_id` | Existing NSG ID for SLI NIC (null = create new) | `null` | no |
 | `slo_private_ip` | Static SLO IP (null = DHCP) | `null` | no |
@@ -206,6 +205,9 @@ From SiteCLI, you can run host commands via `execcli`:
 | `create_public_ip` | Create a Standard SKU public IP on the SLO NIC | `true` | no |
 | `deploy_test_vm` | Deploy Ubuntu test VM on SLI subnet | `false` | no |
 | `test_vm_size` | Azure VM size for test VM | `Standard_B2s` | no |
+| `test_vm_remote_cidrs` | Remote inside CIDRs to route via CE SLI | `[]` | no |
+| `enable_etcd_fix` | TEMPORARY: cloud-init fix for blank ETCD_IMAGE | `true` | no |
+| `image_id` | Existing Azure Image ID (skip VHD import if provided) | `null` | no |
 | `tags` | Azure resource tags | `{}` | no |
 
 ## Outputs
@@ -231,6 +233,7 @@ From SiteCLI, you can run host commands via `execcli`:
 ├── main.tf                  # Azure infra (NSGs, NICs, PIP, VM)
 ├── f5xc.tf                  # SMSv2 site, registration token, cloud-init
 ├── image.tf                 # VHD download/upload + Azure Image
+├── test_vm.tf               # Optional test VM on SLI subnet
 ├── outputs.tf               # Outputs
 ├── terraform.tfvars.example # Example variable values
 ├── scripts/
@@ -249,7 +252,8 @@ graph LR
     C --> D["Create SMSv2<br/>Site + Token"]
     D --> E["Deploy CE VM<br/>(cloud-init)"]
     E --> F["CE Registers<br/>with F5 XC"]
-    F --> G["Site Online"]
+    F --> G["Day-2 Provisioners<br/>(Public IP, Segment,<br/>Site-to-Site)"]
+    G --> H["Site Online"]
 ```
 
 1. **`terraform_data.vhd_upload`** — Downloads the VHD.gz from the F5 XC image repo, decompresses it, and uploads to Azure Gov Storage as a Page Blob using storage account key auth. Skips entirely if the blob already exists.
@@ -269,14 +273,14 @@ By default, the template creates **all** Azure infrastructure (resource group, V
 - `vhd_storage_account_name` — existing storage account (otherwise creates a new one)
 - `slo_security_group_id` / `sli_security_group_id` — existing NSG IDs (otherwise creates new NSGs)
 
-**Route Tables** — Not managed by this template. Configure UDRs on the SLI subnet externally if you need to route workload traffic through the CE.
+**Route Tables** — The template creates a route table on the SLI subnet with a VNet-local route. Remote CIDR routes to workloads behind other CEs are configured via cloud-init on the test VM using `test_vm_remote_cidrs`.
 
 **NSGs** — By default, the template creates lightweight NSGs for the SLO and SLI NICs. In enterprise environments with centrally managed NSGs, pass existing NSG IDs via `slo_security_group_id` and `sli_security_group_id` to skip NSG creation entirely.
 
 ### Networking Details
 
 - **SLO (eth0)** — Outside interface, first NIC. Outbound internet required for F5 XC registration. Optional Standard SKU public IP. Default NSG allows all outbound.
-- **SLI (eth1)** — Inside interface, second NIC. Used for LAN/workload traffic. Default NSG allows all inbound.
+- **SLI (eth1)** — Inside interface, second NIC. Used for LAN/workload traffic. Default NSG allows all inbound and all outbound.
 - Both NICs have **accelerated networking** and **IP forwarding** enabled.
 - Resource names include a random 4-character hex suffix to avoid conflicts.
 - Boot diagnostics are enabled (uses managed storage).
