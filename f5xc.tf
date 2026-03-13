@@ -84,29 +84,40 @@ resource "terraform_data" "set_public_ip" {
         CURL_AUTH=(--cert "$CERT_FILE" --key "$KEY_FILE")
       fi
 
-      echo "Waiting for site $SITE_NAME to come ONLINE..."
+      echo "Waiting for site $SITE_NAME node_list to be populated..."
       elapsed=0
       while true; do
-        STATE=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME" | \
-          python3 -c "import sys,json; print(json.load(sys.stdin).get('spec',{}).get('site_state',''))" 2>/dev/null || echo "")
-        if [ "$STATE" = "ONLINE" ]; then
-          echo "Site is ONLINE."
+        CURRENT=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME")
+        HAS_NODES=$(echo "$CURRENT" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for cloud in ['aws','azure','kvm','vmware','baremetal']:
+    nm = d.get('spec',{}).get(cloud,{}).get('not_managed',{})
+    if nm.get('node_list',[]):
+        print('yes')
+        break
+" 2>/dev/null || echo "")
+        STATE=$(echo "$CURRENT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('spec',{}).get('site_state',''))" 2>/dev/null || echo "")
+        if [ "$HAS_NODES" = "yes" ]; then
+          echo "Node registered (state: $STATE)."
           break
         fi
         if [ "$elapsed" -ge "$MAX_WAIT" ]; then
-          echo "WARNING: Site not ONLINE after $${MAX_WAIT}s. Skipping public IP update."
+          echo "WARNING: No nodes after $${MAX_WAIT}s. Skipping public IP update."
           exit 0
         fi
-        echo "  State: $STATE ($${elapsed}s elapsed)"
+        echo "  State: $STATE, no nodes yet ($${elapsed}s elapsed)"
         sleep $POLL_INTERVAL
         elapsed=$((elapsed + POLL_INTERVAL))
       done
 
-      # GET current config, update public_ip on the node, PUT back.
+      # Update public_ip on the node, PUT back.
       # Retry on RESOURCE_VERSION_MISMATCH — the CE updates the object frequently.
       MAX_RETRIES=10
       for attempt in $(seq 1 $MAX_RETRIES); do
-        CURRENT=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME")
+        if [ "$attempt" -gt 1 ]; then
+          CURRENT=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME")
+        fi
 
         UPDATED=$(echo "$CURRENT" | python3 -c "
 import sys, json
@@ -194,51 +205,69 @@ resource "terraform_data" "set_segment_interface" {
         CURL_AUTH=(--cert "$CERT_FILE" --key "$KEY_FILE")
       fi
 
-      echo "Waiting for site $SITE_NAME to come ONLINE..."
+      echo "Waiting for site $SITE_NAME node with interfaces..."
       elapsed=0
       while true; do
-        STATE=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME" | \
-          python3 -c "import sys,json; print(json.load(sys.stdin).get('spec',{}).get('site_state',''))" 2>/dev/null || echo "")
-        if [ "$STATE" = "ONLINE" ]; then
-          echo "Site is ONLINE."
+        CURRENT=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME")
+        HAS_IFACES=$(echo "$CURRENT" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for cloud in ['aws','azure','kvm','vmware','baremetal']:
+    nm = d.get('spec',{}).get(cloud,{}).get('not_managed',{})
+    nodes = nm.get('node_list',[])
+    if nodes and len(nodes[0].get('interface_list',[])) > 1:
+        print('yes')
+        break
+" 2>/dev/null || echo "")
+        STATE=$(echo "$CURRENT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('spec',{}).get('site_state',''))" 2>/dev/null || echo "")
+        if [ "$HAS_IFACES" = "yes" ]; then
+          echo "Node with interfaces found (state: $STATE)."
           break
         fi
         if [ "$elapsed" -ge "$MAX_WAIT" ]; then
-          echo "WARNING: Site not ONLINE after $${MAX_WAIT}s. Skipping segment config."
+          echo "WARNING: No node interfaces after $${MAX_WAIT}s. Skipping segment config."
           exit 0
         fi
-        echo "  State: $STATE ($${elapsed}s elapsed)"
+        echo "  State: $STATE, waiting for interfaces ($${elapsed}s elapsed)"
         sleep $POLL_INTERVAL
         elapsed=$((elapsed + POLL_INTERVAL))
       done
 
-      # GET current config, set segment on SLI interface, PUT back.
+      # Set segment on SLI interface, PUT back.
       # Retry on RESOURCE_VERSION_MISMATCH — the CE updates the object frequently.
       MAX_RETRIES=10
       for attempt in $(seq 1 $MAX_RETRIES); do
-        CURRENT=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME")
+        if [ "$attempt" -gt 1 ]; then
+          CURRENT=$(curl -s "$${CURL_AUTH[@]}" "$API_URL/config/namespaces/system/securemesh_site_v2s/$SITE_NAME")
+        fi
 
         UPDATED=$(echo "$CURRENT" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 segment_name = '$SEGMENT_NAME'
 tenant = d.get('system_metadata',{}).get('tenant', '')
+changed = 0
 for cloud in ['aws','azure','kvm','vmware','baremetal']:
     nm = d.get('spec',{}).get(cloud,{}).get('not_managed',{})
     nodes = nm.get('node_list',[])
     if nodes:
         ifaces = nodes[0].get('interface_list',[])
-        # SLI is the second interface (index 1)
-        if len(ifaces) > 1:
-            ifaces[1]['network_option'] = {
-                'segment_network': {
-                    'name': segment_name,
-                    'namespace': 'system',
-                    'tenant': tenant
+        # Set segment on ALL interfaces with site_local_inside_network
+        for iface in ifaces:
+            net_opt = iface.get('network_option',{})
+            if 'site_local_inside_network' in net_opt:
+                iface['network_option'] = {
+                    'segment_network': {
+                        'name': segment_name,
+                        'namespace': 'system',
+                        'tenant': tenant
+                    }
                 }
-            }
-            ifaces[1]['site_to_site_connectivity_interface_enabled'] = {}
+                iface['site_to_site_connectivity_interface_enabled'] = {}
+                changed += 1
         break
+if not changed:
+    print('NO_SLI_FOUND', file=sys.stderr)
 body = {
     'metadata': {
         'name': d['metadata']['name'],
@@ -278,12 +307,14 @@ print(json.dumps(body))
   depends_on = [
     volterra_securemesh_site_v2.this,
     azurerm_linux_virtual_machine.ce,
-    terraform_data.push_upgrades,
+    terraform_data.set_public_ip,
   ]
 }
 
 # -----------------------------------------------------------------------------
-# Push available OS and SW updates after site is configured.
+# Push available OS and SW updates after ALL other Day-2 config is done.
+# Runs LAST because upgrades reboot the node and we don't want to block
+# set_public_ip or set_segment_interface waiting through a reboot cycle.
 # Uses the /sites/ (not /securemesh_site_v2s/) endpoint for upgrade operations.
 # -----------------------------------------------------------------------------
 
@@ -412,6 +443,7 @@ for s in d.get('status', []):
     volterra_securemesh_site_v2.this,
     azurerm_linux_virtual_machine.ce,
     terraform_data.set_public_ip,
+    terraform_data.set_segment_interface,
   ]
 }
 
