@@ -131,6 +131,11 @@ resource "azurerm_route" "sli_default_via_ce" {
 resource "azurerm_subnet_route_table_association" "sli" {
   subnet_id      = local.inside_subnet_id
   route_table_id = azurerm_route_table.sli.id
+
+  depends_on = [
+    azurerm_route.sli_vnet,
+    azurerm_route.sli_default_via_ce,
+  ]
 }
 
 # -----------------------------------------------------------------------------
@@ -214,6 +219,21 @@ resource "azurerm_network_security_rule" "slo_ipsec_esp" {
   protocol                    = "Esp"
   source_port_range           = "*"
   destination_port_range      = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "*"
+  resource_group_name         = local.resource_group_name
+  network_security_group_name = azurerm_network_security_group.slo[0].name
+}
+
+resource "azurerm_network_security_rule" "slo_ssh" {
+  count                       = var.slo_security_group_id == null ? 1 : 0
+  name                        = "AllowSSH"
+  priority                    = 120
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "22"
   source_address_prefix       = "*"
   destination_address_prefix  = "*"
   resource_group_name         = local.resource_group_name
@@ -352,6 +372,7 @@ resource "azurerm_linux_virtual_machine" "ce" {
   depends_on = [
     azurerm_network_interface_security_group_association.slo,
     azurerm_network_interface_security_group_association.sli,
+    volterra_token.this,
   ]
 }
 
