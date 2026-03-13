@@ -101,6 +101,12 @@ variable "vhd_download_url" {
   default     = "https://vesio.blob.core.windows.net/releases/rhel/9/x86_64/images/securemeshV2/azure/f5xc-ce-9.2024.44-20250102054713.vhd.gz"
 }
 
+variable "ce_image_file" {
+  type        = string
+  description = "Path to a pre-downloaded CE image file. When set, skips downloading from vhd_download_url."
+  default     = null
+}
+
 variable "vhd_storage_account_name" {
   type        = string
   description = "Existing Azure Gov Storage account for the CE VHD image. If null, a new one is created."

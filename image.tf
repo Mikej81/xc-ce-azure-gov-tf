@@ -61,16 +61,23 @@ resource "terraform_data" "vhd_upload" {
         exit 0
       fi
 
-      WORK_DIR=$(mktemp -d)
-      trap 'rm -rf "$WORK_DIR"' EXIT
+      # Use pre-downloaded image if available, otherwise download
+      CE_IMAGE_FILE="${var.ce_image_file != null ? var.ce_image_file : ""}"
+      if [[ -n "$CE_IMAGE_FILE" && -f "$CE_IMAGE_FILE" ]]; then
+        echo "Using pre-downloaded CE image: $CE_IMAGE_FILE ($(du -h "$CE_IMAGE_FILE" | cut -f1))"
+        VHD_FILE="$CE_IMAGE_FILE"
+      else
+        WORK_DIR=$(mktemp -d)
+        trap 'rm -rf "$WORK_DIR"' EXIT
 
-      echo "Downloading CE VHD image..."
-      curl -fL --progress-bar -o "$WORK_DIR/$(basename "${var.vhd_download_url}")" "${var.vhd_download_url}"
+        echo "Downloading CE VHD image..."
+        curl -fL --progress-bar -o "$WORK_DIR/$(basename "${var.vhd_download_url}")" "${var.vhd_download_url}"
 
-      echo "Decompressing..."
-      gunzip "$WORK_DIR/"*.gz
+        echo "Decompressing..."
+        gunzip "$WORK_DIR/"*.gz
 
-      VHD_FILE=$(find "$WORK_DIR" -name "*.vhd" -type f | head -1)
+        VHD_FILE=$(find "$WORK_DIR" -name "*.vhd" -type f | head -1)
+      fi
 
       # Ensure container exists
       az storage container create \

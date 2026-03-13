@@ -319,6 +319,7 @@ print(json.dumps(body))
 # -----------------------------------------------------------------------------
 
 resource "terraform_data" "push_upgrades" {
+  count            = 0 # Disabled — OS/SW upgrades cause race conditions during provisioning
   triggers_replace = [volterra_securemesh_site_v2.this.name]
 
   provisioner "local-exec" {
